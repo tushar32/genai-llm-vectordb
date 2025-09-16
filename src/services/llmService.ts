@@ -285,7 +285,7 @@ Answer:`;
       // Create transform stream to parse Bedrock chunks
       const bedrockParser = new Transform({
         objectMode: false,
-        transform(chunk: any, encoding: BufferEncoding, callback: Function) {
+        transform(chunk: any, encoding: BufferEncoding, callback: (error?: Error | null, data?: any) => void): void {
           try {
             const chunkStr = chunk.toString();
             const lines = chunkStr.split('\n').filter((line: string) => line.trim());
@@ -305,13 +305,12 @@ Answer:`;
                   }
                 } catch (parseError) {
                   console.warn('Failed to parse Bedrock chunk:', parseError);
-                  // Continue processing other chunks
                 }
               }
             }
             callback();
           } catch (error) {
-            callback(error);
+            callback(error instanceof Error ? error : new Error(String(error)));
           }
         }
       });

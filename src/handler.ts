@@ -67,7 +67,7 @@ export const handler = awslambda.streamifyResponse(async (event, responseStream,
 
     if (path === '/ask' && method === 'POST') {
       const body = parseRequestBody(event);
-      const { query, collection = 'default', limit = 5 } = body;
+      const { query, limit = 5 } = body;
 
       if (!query) {
         responseStream.write('Error: Query parameter is required');
