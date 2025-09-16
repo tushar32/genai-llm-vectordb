@@ -1,0 +1,23 @@
+{
+  "entryPoints": ["src"],
+  "out": "docs/api",
+  "theme": "default",
+  "name": "RAG API Documentation",
+  "includeVersion": true,
+  "excludePrivate": true,
+  "excludeProtected": true,
+  "excludeExternals": true,
+  "readme": "README.md",
+  "plugin": ["typedoc-plugin-markdown"],
+  "gitRevision": "main",
+  "sort": ["source-order"],
+  "categorizeByGroup": true,
+  "defaultCategory": "Other",
+  "categoryOrder": [
+    "Controllers",
+    "Services", 
+    "Configuration",
+    "Types",
+    "Other"
+  ]
+}

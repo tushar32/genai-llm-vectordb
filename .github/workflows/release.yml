@@ -1,0 +1,246 @@
+name: Release Pipeline
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version'
+        required: true
+        default: 'v1.0.0'
+
+env:
+  NODE_VERSION: '18'
+  AWS_REGION: 'us-east-1'
+
+jobs:
+  release:
+    name: Create Release Build
+    runs-on: ubuntu-latest
+    
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      docker-tag: ${{ steps.version.outputs.docker-tag }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Extract version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            VERSION=${{ github.event.release.tag_name }}
+          else
+            VERSION=${{ github.event.inputs.version }}
+          fi
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "docker-tag=${VERSION}-$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build application
+        run: npm run build
+
+      - name: Run tests
+        run: npm run test:coverage
+
+      - name: Create release archive
+        run: |
+          tar -czf rag-api-${{ steps.version.outputs.version }}.tar.gz \
+            dist/ \
+            package.json \
+            package-lock.json \
+            serverless.yml \
+            knexfile.ts \
+            migrations/ \
+            seeds/
+
+      - name: Upload release assets
+        if: github.event_name == 'release'
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: ./rag-api-${{ steps.version.outputs.version }}.tar.gz
+          asset_name: rag-api-${{ steps.version.outputs.version }}.tar.gz
+          asset_content_type: application/gzip
+
+  docker-release:
+    name: Build and Push Release Docker Image
+    runs-on: ubuntu-latest
+    needs: release
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push Docker image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: rag-api
+          IMAGE_TAG: ${{ needs.release.outputs.docker-tag }}
+        run: |
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:latest .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: [release, docker-release]
+    environment: production
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Run database migrations
+        env:
+          DB_HOST: ${{ secrets.PROD_DB_HOST }}
+          DB_PORT: ${{ secrets.PROD_DB_PORT }}
+          DB_NAME: ${{ secrets.PROD_DB_NAME }}
+          DB_USER: ${{ secrets.PROD_DB_USER }}
+          DB_PASSWORD: ${{ secrets.PROD_DB_PASSWORD }}
+          DB_SSL: true
+          NODE_ENV: production
+        run: |
+          npm run migrate:latest
+          npm run migrate:status
+
+      - name: Deploy to AWS Lambda
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          AWS_BEDROCK_REGION: ${{ secrets.AWS_BEDROCK_REGION }}
+          BEDROCK_MODEL_ID: ${{ secrets.BEDROCK_MODEL_ID }}
+          DB_HOST: ${{ secrets.PROD_DB_HOST }}
+          DB_PORT: ${{ secrets.PROD_DB_PORT }}
+          DB_NAME: ${{ secrets.PROD_DB_NAME }}
+          DB_USER: ${{ secrets.PROD_DB_USER }}
+          DB_PASSWORD: ${{ secrets.PROD_DB_PASSWORD }}
+          DB_SSL: true
+        run: |
+          npx serverless deploy --stage production --verbose
+
+      - name: Update CloudFront distribution
+        run: |
+          aws cloudformation deploy \
+            --template-file cloudfront-config.yml \
+            --stack-name rag-api-cloudfront-production \
+            --parameter-overrides \
+              Stage=production \
+              Version=${{ needs.release.outputs.version }}
+
+      - name: Run production health checks
+        env:
+          API_URL: ${{ secrets.PROD_API_URL }}
+        run: |
+          sleep 30  # Wait for deployment to stabilize
+          npm run test:health
+
+      - name: Notify Slack on success
+        if: success()
+        uses: 8398a7/action-slack@v3
+        with:
+          status: success
+          channel: '#releases'
+          text: |
+            🚀 RAG API ${{ needs.release.outputs.version }} successfully deployed to production!
+            
+            Release Notes: ${{ github.event.release.html_url }}
+            Deployment: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+      - name: Create deployment record
+        run: |
+          aws dynamodb put-item \
+            --table-name deployments \
+            --item '{
+              "id": {"S": "${{ github.run_id }}"},
+              "version": {"S": "${{ needs.release.outputs.version }}"},
+              "environment": {"S": "production"},
+              "timestamp": {"S": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'"},
+              "commit": {"S": "${{ github.sha }}"},
+              "status": {"S": "success"}
+            }' || true
+
+  rollback:
+    name: Rollback on Failure
+    runs-on: ubuntu-latest
+    needs: [release, deploy-production]
+    if: failure()
+    
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Get previous deployment
+        id: previous
+        run: |
+          PREVIOUS_VERSION=$(aws lambda get-function \
+            --function-name rag-api-production \
+            --query 'Configuration.Environment.Variables.PREVIOUS_VERSION' \
+            --output text)
+          echo "version=${PREVIOUS_VERSION}" >> $GITHUB_OUTPUT
+
+      - name: Rollback Lambda function
+        if: steps.previous.outputs.version != 'None'
+        run: |
+          aws lambda update-function-code \
+            --function-name rag-api-production \
+            --image-uri ${{ secrets.ECR_REGISTRY }}/rag-api:${{ steps.previous.outputs.version }}
+
+      - name: Notify Slack on rollback
+        uses: 8398a7/action-slack@v3
+        with:
+          status: failure
+          channel: '#alerts'
+          text: |
+            ⚠️ RAG API ${{ needs.release.outputs.version }} deployment failed and was rolled back!
+            
+            Previous version: ${{ steps.previous.outputs.version }}
+            Failed deployment: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}

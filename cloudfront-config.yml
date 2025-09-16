@@ -1,0 +1,92 @@
+# CloudFormation template for CloudFront distribution
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'CloudFront distribution for RAG API with Lambda Function URL'
+
+Parameters:
+  LambdaFunctionUrl:
+    Type: String
+    Description: Lambda Function URL for the RAG API
+  
+  Stage:
+    Type: String
+    Default: dev
+    Description: Deployment stage
+
+Resources:
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub 'RAG API CloudFront Distribution - ${Stage}'
+        
+        Origins:
+          - Id: LambdaOrigin
+            DomainName: !Sub '${LambdaFunctionUrl}'
+            CustomOriginConfig:
+              HTTPPort: 443
+              HTTPSPort: 443
+              OriginProtocolPolicy: https-only
+              OriginSSLProtocols:
+                - TLSv1.2
+        
+        DefaultCacheBehavior:
+          TargetOriginId: LambdaOrigin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods:
+            - DELETE
+            - GET
+            - HEAD
+            - OPTIONS
+            - PATCH
+            - POST
+            - PUT
+          CachedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+          ForwardedValues:
+            QueryString: true
+            Headers:
+              - Authorization
+              - Content-Type
+              - Origin
+              - Referer
+          DefaultTTL: 0
+          MaxTTL: 0
+          MinTTL: 0
+        
+        CacheBehaviors:
+          - PathPattern: '/api/ask*'
+            TargetOriginId: LambdaOrigin
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods:
+              - POST
+              - OPTIONS
+            CachedMethods:
+              - OPTIONS
+            ForwardedValues:
+              QueryString: true
+              Headers:
+                - '*'
+            DefaultTTL: 0
+            MaxTTL: 0
+            MinTTL: 0
+        
+        PriceClass: PriceClass_100
+        
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: true
+
+Outputs:
+  CloudFrontDomainName:
+    Description: CloudFront Distribution Domain Name
+    Value: !GetAtt CloudFrontDistribution.DomainName
+    Export:
+      Name: !Sub '${AWS::StackName}-CloudFrontDomainName'
+  
+  CloudFrontDistributionId:
+    Description: CloudFront Distribution ID
+    Value: !Ref CloudFrontDistribution
+    Export:
+      Name: !Sub '${AWS::StackName}-CloudFrontDistributionId'

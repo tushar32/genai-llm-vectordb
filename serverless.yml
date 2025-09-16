@@ -1,0 +1,104 @@
+service: rag-api-nodejs
+
+frameworkVersion: '3'
+
+provider:
+  name: aws
+  runtime: nodejs20.x
+  region: ${opt:region, 'us-east-1'}
+  stage: ${opt:stage, 'dev'}
+  memorySize: 1024
+  timeout: 30
+  # VPC configuration is required for the Lambda to connect to the RDS Proxy
+  vpc: ${self:custom.vpc.config.${opt:stage}}
+  environment: ${self:custom.environment.${opt:stage}}
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action:
+            - bedrock:InvokeModel
+            - bedrock:InvokeModelWithResponseStream
+          Resource: '*'
+        # This permission allows the Lambda function to connect to the RDS Proxy using IAM authentication
+        - Effect: Allow
+          Action: rds-db:connect
+          Resource: 'arn:aws:rds-db:${aws:region}:${aws:accountId}:dbuser:${self:custom.database.proxyResourceId.${opt:stage}}/${self:custom.database.user.${opt:stage}}'
+
+functions:
+  api:
+    handler: dist/handler.handler
+    memorySize: 2048
+    timeout: 900  # 15 minutes for streaming responses
+    environment:
+      LAMBDA_TELEMETRY_LOG_LEVEL: WARN
+
+plugins:
+  - serverless-offline
+  - serverless-plugin-include-dependencies
+
+custom:
+  stage: ${opt:stage, self:provider.stage}
+  environment:
+    dev:
+      NODE_ENV: ${self:provider.stage}
+      DB_HOST: ${self:custom.database.host.dev}
+      DB_PORT: ${self:custom.database.port.dev}
+      DB_NAME: ${self:custom.database.name.dev}
+      DB_USER: ${self:custom.database.user.dev}
+      DB_PASSWORD: ${self:custom.database.password.dev}
+      DB_IAM_AUTH: ${self:custom.database.iamAuth.dev}
+      BEDROCK_MODEL_ID: ${env:BEDROCK_MODEL_ID, 'anthropic.claude-3-sonnet-20240229-v1:0'}
+    staging:
+      NODE_ENV: ${self:provider.stage}
+      DB_HOST: ${self:custom.database.host.staging}
+      DB_PORT: ${self:custom.database.port.staging}
+      DB_NAME: ${self:custom.database.name.staging}
+      DB_USER: ${self:custom.database.user.staging}
+      DB_IAM_AUTH: ${self:custom.database.iamAuth.staging}
+      BEDROCK_MODEL_ID: ${env:BEDROCK_MODEL_ID, 'anthropic.claude-3-sonnet-20240229-v1:0'}
+  vpc:
+    config:
+      dev: ~  # No VPC for local development
+      staging:
+        securityGroupIds:
+          - sg-09721f9bf7b79fae3
+        subnetIds:
+          - subnet-029c4de344e696f6e
+          - subnet-0313cd1b3c53cc058
+
+  database:
+    host:
+      dev: localhost
+      staging: rag-api-staging-proxy.proxy-cq9g6qc2s22h.us-east-1.rds.amazonaws.com # <-- Find this in the RDS Proxy console
+    port:
+      dev: 5432
+      staging: 5432
+    name:
+      dev: vectordb
+      staging: rag-api-dev-db
+    user:
+      dev: postgres
+      staging: dev_rag
+    password:
+      dev: postgres
+      staging: '' # Password is now handled by IAM
+    iamAuth:
+      dev: false
+      staging: true
+    proxyResourceId:
+      dev: null
+      staging: prx-0123456789abcdef # <-- The Resource ID of your RDS Proxy
+
+  serverless-offline:
+    httpPort: 3000
+    host: 0.0.0.0
+
+package:
+  patterns:
+    - '!.gitignore'
+    - '!tsconfig.json'
+    - '!jest.config.*'
+    - '!.eslintrc.*'
+    - 'dist/**'
+    - 'package.json'

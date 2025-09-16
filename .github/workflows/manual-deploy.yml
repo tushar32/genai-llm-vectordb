@@ -1,0 +1,266 @@
+name: Manual Deployment & Rollback
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: true
+        type: choice
+        options:
+          - staging
+          - production
+      action:
+        description: 'Action to perform'
+        required: true
+        type: choice
+        options:
+          - deploy
+          - rollback
+      confirm_production:
+        description: 'Type "CONFIRM" to deploy to production'
+        required: false
+        type: string
+        default: ''
+
+env:
+  NODE_VERSION: '18'
+  AWS_REGION: 'us-east-1'
+
+jobs:
+  validate-inputs:
+    name: Validate Deployment Inputs
+    runs-on: ubuntu-latest
+    outputs:
+      proceed: ${{ steps.validate.outputs.proceed }}
+    
+    steps:
+      - name: Validate production deployment
+        id: validate
+        run: |
+          if [ "${{ github.event.inputs.environment }}" = "production" ] && [ "${{ github.event.inputs.action }}" = "deploy" ]; then
+            if [ "${{ github.event.inputs.confirm_production }}" != "CONFIRM" ]; then
+              echo "❌ Production deployment requires confirmation. Please type 'CONFIRM' in the confirm_production field."
+              exit 1
+            fi
+          fi
+          echo "proceed=true" >> $GITHUB_OUTPUT
+
+  manual-deploy:
+    name: Manual Deploy to ${{ github.event.inputs.environment }}
+    runs-on: ubuntu-latest
+    needs: validate-inputs
+    if: github.event.inputs.action == 'deploy' && needs.validate-inputs.outputs.proceed == 'true'
+    environment: ${{ github.event.inputs.environment }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build application
+        run: npm run build
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push Docker image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: rag-api
+          IMAGE_TAG: manual-${{ github.event.inputs.environment }}-${{ github.run_number }}
+        run: |
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          echo "IMAGE_URI=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_ENV
+
+      - name: Run database migrations
+        env:
+          NODE_ENV: ${{ github.event.inputs.environment }}
+          DB_HOST: ${{ github.event.inputs.environment == 'production' && secrets.PROD_DB_HOST || secrets.STAGING_DB_HOST }}
+          DB_NAME: ${{ github.event.inputs.environment == 'production' && secrets.PROD_DB_NAME || secrets.STAGING_DB_NAME }}
+          DB_USER: ${{ github.event.inputs.environment == 'production' && secrets.PROD_DB_USER || secrets.STAGING_DB_USER }}
+          DB_PASSWORD: ${{ github.event.inputs.environment == 'production' && secrets.PROD_DB_PASSWORD || secrets.STAGING_DB_PASSWORD }}
+          DB_SSL: 'true'
+        run: |
+          npm run migrate:latest
+          npm run migrate:status
+
+      - name: Deploy to AWS Lambda
+        env:
+          NODE_ENV: ${{ github.event.inputs.environment }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          AWS_BEDROCK_REGION: ${{ secrets.AWS_BEDROCK_REGION }}
+          BEDROCK_MODEL_ID: ${{ secrets.BEDROCK_MODEL_ID }}
+          DB_HOST: ${{ github.event.inputs.environment == 'production' && secrets.PROD_DB_HOST || secrets.STAGING_DB_HOST }}
+          DB_NAME: ${{ github.event.inputs.environment == 'production' && secrets.PROD_DB_NAME || secrets.STAGING_DB_NAME }}
+          DB_USER: ${{ github.event.inputs.environment == 'production' && secrets.PROD_DB_USER || secrets.STAGING_DB_USER }}
+          DB_PASSWORD: ${{ github.event.inputs.environment == 'production' && secrets.PROD_DB_PASSWORD || secrets.STAGING_DB_PASSWORD }}
+          DB_SSL: 'true'
+        run: |
+          npx serverless deploy --stage ${{ github.event.inputs.environment }} --verbose
+
+      - name: Update CloudFront (Production only)
+        if: github.event.inputs.environment == 'production'
+        run: |
+          aws cloudformation deploy \
+            --template-file cloudfront-config.yml \
+            --stack-name rag-api-cloudfront-production \
+            --parameter-overrides Stage=production
+
+      - name: Run health checks
+        env:
+          API_URL: ${{ github.event.inputs.environment == 'production' && secrets.PROD_API_URL || secrets.STAGING_API_URL }}
+        run: |
+          sleep 30  # Wait for deployment to stabilize
+          npm run test:health
+
+      - name: Run smoke tests
+        env:
+          API_URL: ${{ github.event.inputs.environment == 'production' && secrets.PROD_API_URL || secrets.STAGING_API_URL }}
+        run: npm run test:smoke
+
+      - name: Notify successful deployment
+        uses: 8398a7/action-slack@v3
+        with:
+          status: success
+          channel: '#deployments'
+          text: |
+            ✅ Manual deployment to ${{ github.event.inputs.environment }} completed successfully!
+            
+            🚀 Deployed by: ${{ github.actor }}
+            📦 Image: ${{ env.IMAGE_URI }}
+            🔗 Workflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+  manual-rollback:
+    name: Manual Rollback in ${{ github.event.inputs.environment }}
+    runs-on: ubuntu-latest
+    if: github.event.inputs.action == 'rollback'
+    environment: ${{ github.event.inputs.environment }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Get deployment history
+        id: history
+        run: |
+          FUNCTION_NAME="rag-api-${{ github.event.inputs.environment }}"
+          
+          # Get current version
+          CURRENT_VERSION=$(aws lambda get-function \
+            --function-name $FUNCTION_NAME \
+            --query 'Configuration.Version' \
+            --output text)
+          
+          # Get previous version
+          PREVIOUS_VERSION=$(aws lambda list-versions-by-function \
+            --function-name $FUNCTION_NAME \
+            --query 'Versions[-2].Version' \
+            --output text)
+          
+          # Get previous image URI
+          PREVIOUS_IMAGE=$(aws lambda get-function \
+            --function-name $FUNCTION_NAME \
+            --qualifier $PREVIOUS_VERSION \
+            --query 'Code.ImageUri' \
+            --output text)
+          
+          echo "current-version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+          echo "previous-version=$PREVIOUS_VERSION" >> $GITHUB_OUTPUT
+          echo "previous-image=$PREVIOUS_IMAGE" >> $GITHUB_OUTPUT
+          echo "function-name=$FUNCTION_NAME" >> $GITHUB_OUTPUT
+
+      - name: Confirm rollback details
+        run: |
+          echo "🔄 Rollback Details:"
+          echo "Environment: ${{ github.event.inputs.environment }}"
+          echo "Function: ${{ steps.history.outputs.function-name }}"
+          echo "Current Version: ${{ steps.history.outputs.current-version }}"
+          echo "Rolling back to Version: ${{ steps.history.outputs.previous-version }}"
+          echo "Previous Image: ${{ steps.history.outputs.previous-image }}"
+
+      - name: Perform rollback
+        run: |
+          echo "🔄 Rolling back Lambda function..."
+          aws lambda update-function-code \
+            --function-name ${{ steps.history.outputs.function-name }} \
+            --image-uri ${{ steps.history.outputs.previous-image }}
+          
+          # Wait for update to complete
+          aws lambda wait function-updated \
+            --function-name ${{ steps.history.outputs.function-name }}
+
+      - name: Verify rollback
+        env:
+          API_URL: ${{ github.event.inputs.environment == 'production' && secrets.PROD_API_URL || secrets.STAGING_API_URL }}
+        run: |
+          echo "⏳ Waiting for rollback to take effect..."
+          sleep 45
+          
+          echo "🔍 Running health check..."
+          curl -f $API_URL/api/health || exit 1
+          
+          echo "✅ Rollback verification successful!"
+
+      - name: Notify rollback completion
+        uses: 8398a7/action-slack@v3
+        with:
+          status: success
+          channel: '#deployments'
+          text: |
+            🔄 Manual rollback completed for ${{ github.event.inputs.environment }}
+            
+            ⏪ Rolled back from: ${{ steps.history.outputs.current-version }}
+            ✅ Rolled back to: ${{ steps.history.outputs.previous-version }}
+            👤 Triggered by: ${{ github.actor }}
+            🔗 Workflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+  notify-failure:
+    name: Notify on Failure
+    runs-on: ubuntu-latest
+    needs: [manual-deploy, manual-rollback]
+    if: failure()
+    
+    steps:
+      - name: Notify failure
+        uses: 8398a7/action-slack@v3
+        with:
+          status: failure
+          channel: '#alerts'
+          text: |
+            ❌ Manual ${{ github.event.inputs.action }} failed for ${{ github.event.inputs.environment }}
+            
+            👤 Triggered by: ${{ github.actor }}
+            🔗 Workflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            
+            Please check the workflow logs for details.
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}

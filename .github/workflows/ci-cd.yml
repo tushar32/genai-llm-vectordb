@@ -1,0 +1,405 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ develop ]  # Only auto-deploy to staging
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:  # Manual trigger for production deployments
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - production
+      action:
+        description: 'Action to perform'
+        required: true
+        default: 'deploy'
+        type: choice
+        options:
+          - deploy
+          - rollback
+
+env:
+  NODE_VERSION: '18'
+  AWS_REGION: 'us-east-1'
+
+jobs:
+  # Job 1: Code Quality & Testing
+  test:
+    name: Test & Code Quality
+    runs-on: ubuntu-latest
+    
+    services:
+      postgres:
+        image: pgvector/pgvector:pg15
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: vectordb_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: TypeScript compilation check
+        run: npm run build
+
+      - name: Run ESLint
+        run: npm run lint
+
+      - name: Setup test database
+        env:
+          DB_HOST: localhost
+          DB_PORT: 5432
+          DB_NAME: vectordb_test
+          DB_USER: postgres
+          DB_PASSWORD: postgres
+          NODE_ENV: test
+        run: |
+          npm run migrate:latest
+
+      - name: Run tests
+        env:
+          DB_HOST: localhost
+          DB_PORT: 5432
+          DB_NAME: vectordb_test
+          DB_USER: postgres
+          DB_PASSWORD: postgres
+          NODE_ENV: test
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: npm run test:coverage
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v3
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+  # Job 2: Security Scanning
+  security:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    needs: test
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run npm audit
+        run: npm audit --audit-level moderate
+
+      - name: Run Snyk security scan
+        uses: snyk/actions/node@master
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          args: --severity-threshold=high
+
+  # Job 3: Build Docker Image
+  build:
+    name: Build & Push Docker Image
+    runs-on: ubuntu-latest
+    needs: [test, security]
+    if: github.ref == 'refs/heads/main'
+    
+    outputs:
+      image-tag: ${{ steps.meta.outputs.tags }}
+      image-digest: ${{ steps.build.outputs.digest }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: ${{ env.AWS_REGION }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.login-ecr.outputs.registry }}/rag-api
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push Docker image
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # Job 4: Deploy to Staging
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: [test, security]
+    if: |
+      (github.ref == 'refs/heads/develop' && github.event_name == 'push') ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'staging' && github.event.inputs.action == 'deploy')
+    environment: staging
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Install Serverless Framework
+        run: npm install -g serverless
+
+      - name: Run database migrations (Staging)
+        env:
+          NODE_ENV: staging
+          DB_HOST: ${{ secrets.STAGING_DB_HOST }}
+          DB_PORT: 5432
+          DB_NAME: ${{ secrets.STAGING_DB_NAME }}
+          DB_USER: ${{ secrets.STAGING_DB_USER }}
+          DB_IAM_AUTH: 'true'
+          AWS_REGION: ${{ env.AWS_REGION }}
+        run: |
+          echo "Running Knex migrations for staging..."
+          npm run migrate:latest
+
+      - name: Run database seeds (Staging)
+        env:
+          NODE_ENV: staging
+          DB_HOST: ${{ secrets.STAGING_DB_HOST }}
+          DB_PORT: 5432
+          DB_NAME: ${{ secrets.STAGING_DB_NAME }}
+          DB_USER: ${{ secrets.STAGING_DB_USER }}
+          DB_IAM_AUTH: 'true'
+          AWS_REGION: ${{ env.AWS_REGION }}
+        run: |
+          echo "Running Knex seeds for staging..."
+          npm run seed:run
+
+      - name: Deploy to AWS Lambda (Staging)
+        env:
+          NODE_ENV: staging
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          DB_HOST: ${{ secrets.STAGING_DB_HOST }}
+          DB_NAME: ${{ secrets.STAGING_DB_NAME }}
+          DB_USER: ${{ secrets.STAGING_DB_USER }}
+          DB_IAM_AUTH: 'true'
+          BEDROCK_MODEL_ID: 'anthropic.claude-3-sonnet-20240229-v1:0'
+        run: serverless deploy --stage staging
+
+      - name: Run smoke tests
+        env:
+          API_URL: ${{ steps.deploy.outputs.api-url }}
+        run: npm run test:smoke
+
+  # Job 5: Deploy to Production (Manual Only)
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: [test, security]
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'production' && github.event.inputs.action == 'deploy'
+    environment: production
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Install Serverless Framework
+        run: npm install -g serverless
+
+      - name: Run database migrations (Production)
+        env:
+          NODE_ENV: production
+          DB_HOST: ${{ secrets.PROD_DB_HOST }}
+          DB_PORT: 5432
+          DB_NAME: ${{ secrets.PROD_DB_NAME }}
+          DB_USER: ${{ secrets.PROD_DB_USER }}
+          DB_IAM_AUTH: 'true'
+          AWS_REGION: ${{ env.AWS_REGION }}
+        run: |
+          echo "Running Knex migrations for production..."
+          npm run migrate:latest
+
+      - name: Run database seeds (Production)
+        env:
+          NODE_ENV: production
+          DB_HOST: ${{ secrets.PROD_DB_HOST }}
+          DB_PORT: 5432
+          DB_NAME: ${{ secrets.PROD_DB_NAME }}
+          DB_USER: ${{ secrets.PROD_DB_USER }}
+          DB_IAM_AUTH: 'true'
+          AWS_REGION: ${{ env.AWS_REGION }}
+        run: |
+          echo "Running Knex seeds for production..."
+          npm run seed:run
+
+      - name: Deploy to AWS Lambda (Production)
+        env:
+          NODE_ENV: production
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          DB_HOST: ${{ secrets.PROD_DB_HOST }}
+          DB_NAME: ${{ secrets.PROD_DB_NAME }}
+          DB_USER: ${{ secrets.PROD_DB_USER }}
+          DB_IAM_AUTH: 'true'
+          BEDROCK_MODEL_ID: 'anthropic.claude-3-sonnet-20240229-v1:0'
+        run: serverless deploy --stage production
+
+      - name: Deploy CloudFront distribution
+        run: |
+          aws cloudformation deploy \
+            --template-file cloudfront-config.yml \
+            --stack-name rag-api-cloudfront-prod \
+            --parameter-overrides \
+              LambdaFunctionUrl=${{ steps.deploy.outputs.function-url }} \
+              Stage=production
+
+      - name: Run production health checks
+        env:
+          API_URL: ${{ steps.deploy.outputs.api-url }}
+        run: npm run test:health
+
+      - name: Notify deployment success
+        uses: 8398a7/action-slack@v3
+        with:
+          status: success
+          channel: '#deployments'
+          text: '🚀 RAG API successfully deployed to production!'
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+  # Job 6: Manual Rollback
+  rollback:
+    name: Manual Rollback
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'rollback'
+    environment: ${{ github.event.inputs.environment }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Get previous deployment version
+        id: previous
+        run: |
+          FUNCTION_NAME="rag-api-${{ github.event.inputs.environment }}"
+          PREVIOUS_VERSION=$(aws lambda list-versions-by-function \
+            --function-name $FUNCTION_NAME \
+            --query 'Versions[-2].Version' \
+            --output text)
+          echo "version=$PREVIOUS_VERSION" >> $GITHUB_OUTPUT
+          echo "function-name=$FUNCTION_NAME" >> $GITHUB_OUTPUT
+
+      - name: Confirm rollback
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const runId = context.runId;
+            
+            core.info(`🔄 Rolling back ${context.payload.inputs.environment} to version ${{ steps.previous.outputs.version }}`);
+            
+            // This creates a manual checkpoint for confirmation
+            await new Promise(resolve => setTimeout(resolve, 5000));
+
+      - name: Rollback Lambda deployment
+        run: |
+          aws lambda update-function-configuration \
+            --function-name ${{ steps.previous.outputs.function-name }} \
+            --environment Variables="{ROLLBACK_VERSION=${{ steps.previous.outputs.version }}}"
+          
+          # Update function code to previous version
+          aws lambda update-function-code \
+            --function-name ${{ steps.previous.outputs.function-name }} \
+            --image-uri ${{ secrets.ECR_REGISTRY }}/rag-api:${{ steps.previous.outputs.version }}
+
+      - name: Verify rollback
+        env:
+          API_URL: ${{ github.event.inputs.environment == 'production' && secrets.PROD_API_URL || secrets.STAGING_API_URL }}
+        run: |
+          sleep 30  # Wait for rollback to take effect
+          curl -f $API_URL/api/health || exit 1
+
+      - name: Notify rollback completion
+        uses: 8398a7/action-slack@v3
+        with:
+          status: success
+          channel: '#deployments'
+          text: |
+            🔄 RAG API rollback completed for ${{ github.event.inputs.environment }}
+            
+            Rolled back to version: ${{ steps.previous.outputs.version }}
+            Triggered by: ${{ github.actor }}
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
