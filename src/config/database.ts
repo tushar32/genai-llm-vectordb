@@ -173,7 +173,7 @@ export async function logQuery(
 /**
  * Database connection class for PostgreSQL with pgVector support (backward compatibility)
  */
-class DatabaseConnection {
+class _DatabaseConnection {
   private db: Knex;
 
   constructor() {

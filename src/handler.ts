@@ -3,14 +3,9 @@
  * @module Handler
  */
 
-import util from 'util';
-import stream from 'stream';
 import DatabaseService from './config/database';
 import EmbeddingService from './services/embeddingService';
 import LLMService from './services/llmService';
-
-const { Readable } = stream;
-const pipeline = util.promisify(stream.pipeline);
 
 // AWS Lambda streaming response is available as awslambda.streamifyResponse
 /* global awslambda */
