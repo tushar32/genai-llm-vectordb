@@ -1,7 +1,10 @@
 import type { Knex } from 'knex';
-import dotenv from 'dotenv';
+import * as dotenv from 'dotenv';
 
 dotenv.config();
+
+// Get the current environment, fallback to development if not specified
+const environment = process.env.NODE_ENV || 'development';
 
 const config: { [key: string]: Knex.Config } = {
   development: {

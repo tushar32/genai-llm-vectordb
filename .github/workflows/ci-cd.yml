@@ -74,7 +74,7 @@ jobs:
           DB_NAME: vectordb_test
           DB_USER: postgres
           DB_PASSWORD: postgres
-          NODE_ENV: test
+          NODE_ENV: development
         run: |
           npm run migrate:latest
 
@@ -85,7 +85,7 @@ jobs:
           DB_NAME: vectordb_test
           DB_USER: postgres
           DB_PASSWORD: postgres
-          NODE_ENV: test
+          NODE_ENV: development
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: npm run test:coverage
 
