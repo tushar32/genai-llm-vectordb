@@ -249,10 +249,16 @@ jobs:
           DB_NAME: ${{ steps.get-db-name.outputs.DB_NAME }}
           DB_USER: ${{ steps.get-db-secrets.outputs.DB_USER }}
           DB_PASSWORD: ${{ steps.get-db-secrets.outputs.DB_PASSWORD }}
-        run: |
+        run: |+
           echo "Running Knex migrations for staging..."
           echo "Database: $DB_HOST:$DB_PORT/$DB_NAME"
           echo "User: $DB_USER"
+           # Wait for PostgreSQL to be ready
+          until pg_isready -h localhost -p 5432 -U postgres; do
+            echo "Waiting for PostgreSQL to be ready..."
+            sleep 2
+          done
+          echo "PostgreSQL is ready!"
           npm run migrate:latest
 
       - name: Run database seeds (Staging)
