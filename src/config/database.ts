@@ -42,10 +42,6 @@ const getDbCredentials = async () => {
 const db = knex({
   client: 'pg',
   connection: async () => await getDbCredentials(),
-  pool: {
-    min: 2,
-    max: 10
-  },
   migrations: {
     tableName: 'knex_migrations'
   }
