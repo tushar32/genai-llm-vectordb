@@ -10,7 +10,14 @@ const config: { [key: string]: Knex.Config } = {
   development: {
     client: 'postgresql',
     connection: `postgresql://${process.env.DB_USER || 'postgres'}:${process.env.DB_PASSWORD || 'postgres'}@${process.env.DB_HOST || 'localhost'}:${process.env.DB_PORT || '5432'}/${process.env.DB_NAME || 'vectordb_test'}`,
-    pool: { min: 0, max: 1 },
+    pool: { 
+      min: 0, 
+      max: 1,
+      acquireTimeoutMillis: 10000,
+      createTimeoutMillis: 10000,
+      destroyTimeoutMillis: 5000,
+      idleTimeoutMillis: 10000
+    },
     migrations: {
       tableName: 'knex_migrations',
       directory: './migrations',
