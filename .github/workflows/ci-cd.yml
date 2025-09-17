@@ -25,7 +25,7 @@ on:
           - rollback
 
 env:
-  NODE_VERSION: '18'
+  NODE_VERSION: '20'
   AWS_REGION: 'us-east-1'
 
 jobs:
