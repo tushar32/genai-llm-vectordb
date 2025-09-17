@@ -9,23 +9,7 @@ const environment = process.env.NODE_ENV || 'development';
 const config: { [key: string]: Knex.Config } = {
   development: {
     client: 'postgresql',
-    connection: {
-      host: process.env.DB_HOST || 'localhost',
-      port: parseInt(process.env.DB_PORT || '5432'),
-      database: process.env.DB_NAME || 'vectordb',
-      user: process.env.DB_USER || 'postgres',
-      password: process.env.DB_PASSWORD || 'postgres',
-    },
-    pool: {
-      min: 0,
-      max: 1,
-      acquireTimeoutMillis: 120000,
-      createTimeoutMillis: 60000,
-      destroyTimeoutMillis: 10000,
-      idleTimeoutMillis: 60000,
-      reapIntervalMillis: 2000,
-      createRetryIntervalMillis: 500
-    },
+    connection: `postgresql://${process.env.DB_USER || 'postgres'}:${process.env.DB_PASSWORD || 'postgres'}@${process.env.DB_HOST || 'localhost'}:${process.env.DB_PORT || '5432'}/${process.env.DB_NAME || 'vectordb_test'}`,
     migrations: {
       tableName: 'knex_migrations',
       directory: './migrations',
@@ -33,8 +17,7 @@ const config: { [key: string]: Knex.Config } = {
     },
     seeds: {
       directory: './seeds'
-    },
-    acquireConnectionTimeout: 120000
+    }
   },
 
   staging: {

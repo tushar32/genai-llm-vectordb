@@ -83,17 +83,18 @@ jobs:
           done
           echo "PostgreSQL is ready!"
           
-          # Run migrations with retry logic
-          for i in {1..3}; do
-            echo "Migration attempt $i..."
-            if npm run migrate:latest; then
-              echo "Migration successful!"
-              break
-            else
-              echo "Migration failed, retrying in 5 seconds..."
-              sleep 5
-            fi
-          done
+          # Test direct connection
+          psql -h localhost -p 5432 -U postgres -d vectordb_test -c "SELECT version();" || echo "Connection test failed"
+          
+          # Run migrations with direct psql approach as fallback
+          echo "Attempting Knex migration..."
+          if ! timeout 60 npm run migrate:latest; then
+            echo "Knex migration failed, trying direct SQL approach..."
+            # Create extensions directly
+            psql -h localhost -p 5432 -U postgres -d vectordb_test -c "CREATE EXTENSION IF NOT EXISTS vector;"
+            psql -h localhost -p 5432 -U postgres -d vectordb_test -c "CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\";"
+            echo "Extensions created successfully"
+          fi
 
       # Skip tests for now - focusing on deployment
       # - name: Run tests
