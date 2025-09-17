@@ -1,37 +1,35 @@
 import type { Knex } from 'knex';
 import * as dotenv from 'dotenv';
+import * as path from 'path';
 
-dotenv.config();
-
-// Get the current environment, fallback to development if not specified
-const environment = process.env.NODE_ENV || 'development';
+// Point to the .env file in the project root
+dotenv.config({ path: path.resolve(__dirname, '.env') });
 
 const config: { [key: string]: Knex.Config } = {
   development: {
     client: 'postgresql',
-    connection: `postgresql://${process.env.DB_USER || 'postgres'}:${process.env.DB_PASSWORD || 'postgres'}@${process.env.DB_HOST || 'localhost'}:${process.env.DB_PORT || '5432'}/${process.env.DB_NAME || 'vectordb_test'}`,
+    connection: `postgresql://${process.env.DB_USER || 'postgres'}:${process.env.DB_PASSWORD || 'postgres'}@${process.env.DB_HOST || 'localhost'}:${process.env.DB_PORT || '5432'}/${process.env.DB_NAME || 'vectordb'}`,
     pool: { 
       min: 0, 
       max: 1,
-      acquireTimeoutMillis: 10000,
+      acquireTimeoutMillis: 60000,
       createTimeoutMillis: 10000,
       destroyTimeoutMillis: 5000,
       idleTimeoutMillis: 10000
     },
     migrations: {
       tableName: 'knex_migrations',
-      directory: './migrations',
+      directory: path.join(__dirname, './src/db/migrations'),
       disableTransactions: true
     },
     seeds: {
-      directory: './seeds'
+      directory: path.join(__dirname, './src/db/seeds')
     }
   },
 
   staging: {
     client: 'postgresql',
     connection: async () => {
-      // Use Secrets Manager for staging credentials
       if (process.env.AWS_REGION) {
         const { SecretsManagerClient, GetSecretValueCommand } = require('@aws-sdk/client-secrets-manager');
         
@@ -54,7 +52,6 @@ const config: { [key: string]: Knex.Config } = {
         }
       }
       
-      // Fallback to environment variables
       return {
         host: process.env.DB_HOST!,
         port: parseInt(process.env.DB_PORT!),
@@ -74,11 +71,11 @@ const config: { [key: string]: Knex.Config } = {
     },
     migrations: {
       tableName: 'knex_migrations',
-      directory: './migrations',
+      directory: path.join(__dirname, 'migrations'),
       disableTransactions: true
     },
     seeds: {
-      directory: './seeds'
+      directory: path.join(__dirname, 'seeds')
     }
   },
 
@@ -102,10 +99,10 @@ const config: { [key: string]: Knex.Config } = {
     },
     migrations: {
       tableName: 'knex_migrations',
-      directory: './migrations'
+      directory: path.join(__dirname, 'migrations')
     },
     seeds: {
-      directory: './seeds'
+      directory: path.join(__dirname, 'seeds')
     }
   }
 };
