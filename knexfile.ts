@@ -63,8 +63,8 @@ const config: { [key: string]: Knex.Config } = {
     },
     pool: { 
       min: 0, 
-      max: 2,
-      acquireTimeoutMillis: 30000,
+      max: 1,
+      acquireTimeoutMillis: 60000,
       createTimeoutMillis: 30000,
       destroyTimeoutMillis: 5000,
       idleTimeoutMillis: 30000
