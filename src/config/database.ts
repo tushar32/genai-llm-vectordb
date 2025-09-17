@@ -38,10 +38,21 @@ const getDbCredentials = async () => {
   }
 };
 
-// Initialize Knex instance using an async factory
+// Initialize Knex instance with proper connection pooling for production
 const db = knex({
   client: 'pg',
   connection: async () => await getDbCredentials(),
+  pool: {
+    min: process.env.NODE_ENV === 'development' ? 0 : 2,
+    max: process.env.NODE_ENV === 'development' ? 2 : 10,
+    acquireTimeoutMillis: 30000,
+    createTimeoutMillis: 30000,
+    destroyTimeoutMillis: 5000,
+    idleTimeoutMillis: 30000,
+    reapIntervalMillis: 1000,
+    createRetryIntervalMillis: 200,
+    propagateCreateError: false
+  },
   migrations: {
     tableName: 'knex_migrations'
   }
