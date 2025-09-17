@@ -218,16 +218,35 @@ jobs:
           SECRET=$(aws secretsmanager get-secret-value --secret-id rag-api-db-staging --query SecretString --output text)
           echo "DB_HOST=$(echo $SECRET | jq -r .host)" >> $GITHUB_OUTPUT
           echo "DB_PORT=$(echo $SECRET | jq -r .port)" >> $GITHUB_OUTPUT
-          echo "DB_NAME=$(echo $SECRET | jq -r .dbname)" >> $GITHUB_OUTPUT
           echo "DB_USER=$(echo $SECRET | jq -r .username)" >> $GITHUB_OUTPUT
           echo "DB_PASSWORD=$(echo $SECRET | jq -r .password)" >> $GITHUB_OUTPUT
+
+      - name: Cache yq binary
+        uses: actions/cache@v3
+        id: cache-yq
+        with:
+          path: /usr/local/bin/yq
+          key: yq-v4.35.2
+
+      - name: Install yq (if not cached)
+        if: steps.cache-yq.outputs.cache-hit != 'true'
+        run: |
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/download/v4.35.2/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+      - name: Get DB_NAME from serverless.yml
+        id: get-db-name
+        run: |
+          # Extract DB_NAME from serverless.yml
+          DB_NAME=$(yq eval '.custom.database.name.staging' serverless.yml)
+          echo "DB_NAME=$DB_NAME" >> $GITHUB_OUTPUT
 
       - name: Run database migrations (Staging)
         env:
           NODE_ENV: staging
           DB_HOST: ${{ steps.get-db-secrets.outputs.DB_HOST }}
           DB_PORT: ${{ steps.get-db-secrets.outputs.DB_PORT }}
-          DB_NAME: ${{ steps.get-db-secrets.outputs.DB_NAME }}
+          DB_NAME: ${{ steps.get-db-name.outputs.DB_NAME }}
           DB_USER: ${{ steps.get-db-secrets.outputs.DB_USER }}
           DB_PASSWORD: ${{ steps.get-db-secrets.outputs.DB_PASSWORD }}
         run: |
@@ -241,7 +260,7 @@ jobs:
           NODE_ENV: staging
           DB_HOST: ${{ steps.get-db-secrets.outputs.DB_HOST }}
           DB_PORT: ${{ steps.get-db-secrets.outputs.DB_PORT }}
-          DB_NAME: ${{ steps.get-db-secrets.outputs.DB_NAME }}
+          DB_NAME: ${{ steps.get-db-name.outputs.DB_NAME }}
           DB_USER: ${{ steps.get-db-secrets.outputs.DB_USER }}
           DB_PASSWORD: ${{ steps.get-db-secrets.outputs.DB_PASSWORD }}
         run: |
@@ -251,13 +270,10 @@ jobs:
       - name: Deploy to AWS Lambda (Staging)
         env:
           NODE_ENV: staging
+          DB_NAME: ${{ steps.get-db-name.outputs.DB_NAME }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          DB_HOST: ${{ secrets.STAGING_DB_HOST }}
-          DB_NAME: ${{ secrets.STAGING_DB_NAME }}
-          DB_USER: ${{ secrets.STAGING_DB_USER }}
-          DB_IAM_AUTH: 'true'
           BEDROCK_MODEL_ID: 'anthropic.claude-3-sonnet-20240229-v1:0'
         run: serverless deploy --stage staging
 
