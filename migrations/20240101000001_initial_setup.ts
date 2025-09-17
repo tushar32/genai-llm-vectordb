@@ -32,7 +32,7 @@ export async function up(knex: Knex): Promise<void> {
 
   // Create optimized indexes for vector search
   await knex.raw(`
-    CREATE INDEX CONCURRENTLY embeddings_vector_cosine_idx 
+    CREATE INDEX embeddings_vector_cosine_idx 
     ON embeddings USING ivfflat (embedding vector_cosine_ops) 
     WITH (lists = 100)
   `);
@@ -84,7 +84,7 @@ export async function up(knex: Knex): Promise<void> {
 
   // Index for backward compatibility
   await knex.raw(`
-    CREATE INDEX CONCURRENTLY langchain_pg_embedding_vector_cosine_idx 
+    CREATE INDEX langchain_pg_embedding_vector_cosine_idx 
     ON langchain_pg_embedding USING ivfflat (embedding vector_cosine_ops) 
     WITH (lists = 100)
   `);
