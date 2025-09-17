@@ -76,7 +76,24 @@ jobs:
           DB_PASSWORD: postgres
           NODE_ENV: development
         run: |
-          npm run migrate:latest
+          # Wait for PostgreSQL to be ready
+          until pg_isready -h localhost -p 5432 -U postgres; do
+            echo "Waiting for PostgreSQL to be ready..."
+            sleep 2
+          done
+          echo "PostgreSQL is ready!"
+          
+          # Run migrations with retry logic
+          for i in {1..3}; do
+            echo "Migration attempt $i..."
+            if npm run migrate:latest; then
+              echo "Migration successful!"
+              break
+            else
+              echo "Migration failed, retrying in 5 seconds..."
+              sleep 5
+            fi
+          done
 
       # Skip tests for now - focusing on deployment
       # - name: Run tests

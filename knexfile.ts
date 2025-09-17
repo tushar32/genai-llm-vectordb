@@ -17,23 +17,24 @@ const config: { [key: string]: Knex.Config } = {
       password: process.env.DB_PASSWORD || 'postgres',
     },
     pool: {
-      min: 1,
-      max: 5,
-      acquireTimeoutMillis: 60000,
-      createTimeoutMillis: 30000,
-      destroyTimeoutMillis: 5000,
-      idleTimeoutMillis: 30000,
-      reapIntervalMillis: 1000,
-      createRetryIntervalMillis: 100
+      min: 0,
+      max: 1,
+      acquireTimeoutMillis: 120000,
+      createTimeoutMillis: 60000,
+      destroyTimeoutMillis: 10000,
+      idleTimeoutMillis: 60000,
+      reapIntervalMillis: 2000,
+      createRetryIntervalMillis: 500
     },
     migrations: {
       tableName: 'knex_migrations',
-      directory: './migrations'
+      directory: './migrations',
+      disableTransactions: true
     },
     seeds: {
       directory: './seeds'
     },
-    acquireConnectionTimeout: 60000
+    acquireConnectionTimeout: 120000
   },
 
   staging: {
