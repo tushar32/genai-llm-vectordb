@@ -67,34 +67,23 @@ jobs:
       - name: Run ESLint
         run: npm run lint
 
-      - name: Setup test database
+      - name: Run migrations on staging database
         env:
-          DB_HOST: localhost
+          NODE_ENV: staging
+          DB_HOST: rag-api-staging-proxy.proxy-cq9g6qc2s22h.us-east-1.rds.amazonaws.com
           DB_PORT: 5432
-          DB_NAME: vectordb_test
-          DB_USER: postgres
-          DB_PASSWORD: postgres
-          NODE_ENV: development
+          DB_NAME: rag-api-dev-db
+          DB_USER: dev_rag
+          DB_IAM_AUTH: true
+          AWS_REGION: us-east-1
         run: |
-          # Wait for PostgreSQL to be ready
-          until pg_isready -h localhost -p 5432 -U postgres; do
-            echo "Waiting for PostgreSQL to be ready..."
-            sleep 2
-          done
-          echo "PostgreSQL is ready!"
+          echo "Running migrations on staging database..."
+          echo "Database: $DB_HOST/$DB_NAME"
+          echo "User: $DB_USER"
+          echo "IAM Auth: $DB_IAM_AUTH"
           
-          # Test direct connection
-          psql -h localhost -p 5432 -U postgres -d vectordb_test -c "SELECT version();" || echo "Connection test failed"
-          
-          # Run migrations with direct psql approach as fallback
-          echo "Attempting Knex migration..."
-          if ! timeout 60 npm run migrate:latest; then
-            echo "Knex migration failed, trying direct SQL approach..."
-            # Create extensions directly
-            psql -h localhost -p 5432 -U postgres -d vectordb_test -c "CREATE EXTENSION IF NOT EXISTS vector;"
-            psql -h localhost -p 5432 -U postgres -d vectordb_test -c "CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\";"
-            echo "Extensions created successfully"
-          fi
+          # Run migrations to staging database
+          npm run migrate:latest
 
       # Skip tests for now - focusing on deployment
       # - name: Run tests

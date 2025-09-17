@@ -30,7 +30,7 @@ const config: { [key: string]: Knex.Config } = {
 
   staging: {
     client: 'postgresql',
-    connection: async () => {
+    connection: (async () => {
       const { Signer } = require('@aws-sdk/rds-signer');
       
       if (process.env.DB_IAM_AUTH === 'true') {
@@ -47,7 +47,51 @@ const config: { [key: string]: Knex.Config } = {
           port: parseInt(process.env.DB_PORT!),
           database: process.env.DB_NAME!,
           user: process.env.DB_USER!,
-          password: password,
+          password,
+          ssl: { rejectUnauthorized: false }
+        };
+      } else {
+        return `postgresql://${process.env.DB_USER}:${process.env.DB_PASSWORD}@${process.env.DB_HOST}:${process.env.DB_PORT}/${process.env.DB_NAME}`;
+      }
+    }) as any,
+    pool: { 
+      min: 0, 
+      max: 2,
+      acquireTimeoutMillis: 30000,
+      createTimeoutMillis: 30000,
+      destroyTimeoutMillis: 5000,
+      idleTimeoutMillis: 30000
+    },
+    migrations: {
+      tableName: 'knex_migrations',
+      directory: './migrations',
+      disableTransactions: true
+    },
+    seeds: {
+      directory: './seeds'
+    }
+  },
+
+  production: {
+    client: 'postgresql',
+    connection: (async () => {
+      const { Signer } = require('@aws-sdk/rds-signer');
+      
+      if (process.env.DB_IAM_AUTH === 'true') {
+        const signer = new Signer({
+          hostname: process.env.DB_HOST!,
+          port: parseInt(process.env.DB_PORT!),
+          username: process.env.DB_USER!,
+          region: process.env.AWS_REGION || 'us-east-1',
+        });
+        
+        const password = await signer.getAuthToken();
+        return {
+          host: process.env.DB_HOST!,
+          port: parseInt(process.env.DB_PORT!),
+          database: process.env.DB_NAME!,
+          user: process.env.DB_USER!,
+          password,
           ssl: { rejectUnauthorized: false }
         };
       } else {
@@ -60,10 +104,14 @@ const config: { [key: string]: Knex.Config } = {
           ssl: false
         };
       }
-    },
+    }) as any,
     pool: {
       min: 2,
-      max: 20
+      max: 20,
+      acquireTimeoutMillis: 60000,
+      createTimeoutMillis: 60000,
+      destroyTimeoutMillis: 5000,
+      idleTimeoutMillis: 30000
     },
     migrations: {
       tableName: 'knex_migrations',
@@ -71,29 +119,7 @@ const config: { [key: string]: Knex.Config } = {
     },
     seeds: {
       directory: './seeds'
-    },
-    acquireConnectionTimeout: 60000
-  },
-
-  production: {
-    client: 'postgresql',
-    connection: {
-      host: process.env.DB_HOST || 'localhost',
-      port: parseInt(process.env.DB_PORT || '5432'),
-      database: process.env.DB_NAME || 'vectordb',
-      user: process.env.DB_USER || 'postgres',
-      password: process.env.DB_PASSWORD || 'password',
-      ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : false
-    },
-    pool: {
-      min: 2,
-      max: 20
-    },
-    migrations: {
-      tableName: 'knex_migrations',
-      directory: './migrations'
-    },
-    acquireConnectionTimeout: 60000
+    }
   }
 };
 
