@@ -212,28 +212,38 @@ jobs:
       - name: Install Serverless Framework
         run: npm install -g serverless
 
+      - name: Get database credentials from Secrets Manager
+        id: get-db-secrets
+        run: |
+          SECRET=$(aws secretsmanager get-secret-value --secret-id rag-api-db-staging --query SecretString --output text)
+          echo "DB_HOST=$(echo $SECRET | jq -r .host)" >> $GITHUB_OUTPUT
+          echo "DB_PORT=$(echo $SECRET | jq -r .port)" >> $GITHUB_OUTPUT
+          echo "DB_NAME=$(echo $SECRET | jq -r .dbname)" >> $GITHUB_OUTPUT
+          echo "DB_USER=$(echo $SECRET | jq -r .username)" >> $GITHUB_OUTPUT
+          echo "DB_PASSWORD=$(echo $SECRET | jq -r .password)" >> $GITHUB_OUTPUT
+
       - name: Run database migrations (Staging)
         env:
           NODE_ENV: staging
-          DB_HOST: ${{ secrets.STAGING_DB_HOST }}
-          DB_PORT: 5432
-          DB_NAME: ${{ secrets.STAGING_DB_NAME }}
-          DB_USER: ${{ secrets.STAGING_DB_USER }}
-          DB_IAM_AUTH: 'true'
-          AWS_REGION: ${{ env.AWS_REGION }}
+          DB_HOST: ${{ steps.get-db-secrets.outputs.DB_HOST }}
+          DB_PORT: ${{ steps.get-db-secrets.outputs.DB_PORT }}
+          DB_NAME: ${{ steps.get-db-secrets.outputs.DB_NAME }}
+          DB_USER: ${{ steps.get-db-secrets.outputs.DB_USER }}
+          DB_PASSWORD: ${{ steps.get-db-secrets.outputs.DB_PASSWORD }}
         run: |
           echo "Running Knex migrations for staging..."
+          echo "Database: $DB_HOST:$DB_PORT/$DB_NAME"
+          echo "User: $DB_USER"
           npm run migrate:latest
 
       - name: Run database seeds (Staging)
         env:
           NODE_ENV: staging
-          DB_HOST: ${{ secrets.STAGING_DB_HOST }}
-          DB_PORT: 5432
-          DB_NAME: ${{ secrets.STAGING_DB_NAME }}
-          DB_USER: ${{ secrets.STAGING_DB_USER }}
-          DB_IAM_AUTH: 'true'
-          AWS_REGION: ${{ env.AWS_REGION }}
+          DB_HOST: ${{ steps.get-db-secrets.outputs.DB_HOST }}
+          DB_PORT: ${{ steps.get-db-secrets.outputs.DB_PORT }}
+          DB_NAME: ${{ steps.get-db-secrets.outputs.DB_NAME }}
+          DB_USER: ${{ steps.get-db-secrets.outputs.DB_USER }}
+          DB_PASSWORD: ${{ steps.get-db-secrets.outputs.DB_PASSWORD }}
         run: |
           echo "Running Knex seeds for staging..."
           npm run seed:run

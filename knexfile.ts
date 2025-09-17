@@ -30,30 +30,40 @@ const config: { [key: string]: Knex.Config } = {
 
   staging: {
     client: 'postgresql',
-    connection: (async () => {
-      const { Signer } = require('@aws-sdk/rds-signer');
-      
-      if (process.env.DB_IAM_AUTH === 'true') {
-        const signer = new Signer({
-          hostname: process.env.DB_HOST!,
-          port: parseInt(process.env.DB_PORT!),
-          username: process.env.DB_USER!,
-          region: process.env.AWS_REGION || 'us-east-1',
-        });
+    connection: async () => {
+      // Use Secrets Manager for staging credentials
+      if (process.env.AWS_REGION) {
+        const { SecretsManagerClient, GetSecretValueCommand } = require('@aws-sdk/client-secrets-manager');
         
-        const password = await signer.getAuthToken();
-        return {
-          host: process.env.DB_HOST!,
-          port: parseInt(process.env.DB_PORT!),
-          database: process.env.DB_NAME!,
-          user: process.env.DB_USER!,
-          password,
-          ssl: { rejectUnauthorized: false }
-        };
-      } else {
-        return `postgresql://${process.env.DB_USER}:${process.env.DB_PASSWORD}@${process.env.DB_HOST}:${process.env.DB_PORT}/${process.env.DB_NAME}`;
+        try {
+          const client = new SecretsManagerClient({ region: process.env.AWS_REGION });
+          const command = new GetSecretValueCommand({ SecretId: 'rag-api-db-staging' });
+          const response = await client.send(command);
+          const secret = JSON.parse(response.SecretString!);
+          
+          return {
+            host: secret.host,
+            port: secret.port,
+            database: secret.dbname,
+            user: secret.username,
+            password: secret.password,
+            ssl: { rejectUnauthorized: false }
+          };
+        } catch (error) {
+          console.warn('Failed to get secrets from AWS Secrets Manager, falling back to env vars:', error);
+        }
       }
-    }) as any,
+      
+      // Fallback to environment variables
+      return {
+        host: process.env.DB_HOST!,
+        port: parseInt(process.env.DB_PORT!),
+        database: process.env.DB_NAME!,
+        user: process.env.DB_USER!,
+        password: process.env.DB_PASSWORD!,
+        ssl: { rejectUnauthorized: false }
+      };
+    },
     pool: { 
       min: 0, 
       max: 2,
@@ -74,37 +84,14 @@ const config: { [key: string]: Knex.Config } = {
 
   production: {
     client: 'postgresql',
-    connection: (async () => {
-      const { Signer } = require('@aws-sdk/rds-signer');
-      
-      if (process.env.DB_IAM_AUTH === 'true') {
-        const signer = new Signer({
-          hostname: process.env.DB_HOST!,
-          port: parseInt(process.env.DB_PORT!),
-          username: process.env.DB_USER!,
-          region: process.env.AWS_REGION || 'us-east-1',
-        });
-        
-        const password = await signer.getAuthToken();
-        return {
-          host: process.env.DB_HOST!,
-          port: parseInt(process.env.DB_PORT!),
-          database: process.env.DB_NAME!,
-          user: process.env.DB_USER!,
-          password,
-          ssl: { rejectUnauthorized: false }
-        };
-      } else {
-        return {
-          host: process.env.DB_HOST!,
-          port: parseInt(process.env.DB_PORT!),
-          database: process.env.DB_NAME!,
-          user: process.env.DB_USER!,
-          password: process.env.DB_PASSWORD!,
-          ssl: false
-        };
-      }
-    }) as any,
+    connection: {
+      host: process.env.DB_HOST!,
+      port: parseInt(process.env.DB_PORT!),
+      database: process.env.DB_NAME!,
+      user: process.env.DB_USER!,
+      password: process.env.DB_PASSWORD!,
+      ssl: { rejectUnauthorized: false }
+    },
     pool: {
       min: 2,
       max: 20,
