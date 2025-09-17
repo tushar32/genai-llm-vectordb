@@ -71,11 +71,11 @@ const config: { [key: string]: Knex.Config } = {
     },
     migrations: {
       tableName: 'knex_migrations',
-      directory: path.join(__dirname, 'migrations'),
+      directory: path.join(__dirname, './src/db/migrations'),
       disableTransactions: true
     },
     seeds: {
-      directory: path.join(__dirname, 'seeds')
+      directory: path.join(__dirname, './src/db/seeds')
     }
   },
 
