@@ -52,6 +52,13 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -67,22 +74,23 @@ jobs:
       - name: Run ESLint
         run: npm run lint
 
-      - name: Run migrations on staging database
+      - name: Setup test database
         env:
-          NODE_ENV: staging
-          DB_HOST: rag-api-staging-proxy.proxy-cq9g6qc2s22h.us-east-1.rds.amazonaws.com
+          DB_HOST: localhost
           DB_PORT: 5432
-          DB_NAME: rag-api-dev-db
-          DB_USER: dev_rag
-          DB_IAM_AUTH: true
-          AWS_REGION: us-east-1
+          DB_NAME: vectordb_test
+          DB_USER: postgres
+          DB_PASSWORD: postgres
+          NODE_ENV: development
         run: |
-          echo "Running migrations on staging database..."
-          echo "Database: $DB_HOST/$DB_NAME"
-          echo "User: $DB_USER"
-          echo "IAM Auth: $DB_IAM_AUTH"
+          # Wait for PostgreSQL to be ready
+          until pg_isready -h localhost -p 5432 -U postgres; do
+            echo "Waiting for PostgreSQL to be ready..."
+            sleep 2
+          done
+          echo "PostgreSQL is ready!"
           
-          # Run migrations to staging database
+          # Run migrations on test database
           npm run migrate:latest
 
       # Skip tests for now - focusing on deployment
