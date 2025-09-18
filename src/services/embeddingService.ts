@@ -34,10 +34,21 @@ class EmbeddingService {
       apiKey: process.env.OPENAI_API_KEY || '',
     });
 
-    // Initialize Bedrock client with default credential chain
-    this.bedrockClient = new BedrockRuntimeClient({
-      region: process.env.AWS_REGION || 'us-east-1',
-    });
+    // Initialize Bedrock client with credentials or default credential chain
+    const awsConfig: any = {
+      region: process.env.AWS_REGION || 'us-east-1'
+    };
+
+    // Only set explicit credentials if both are provided
+    if (process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY) {
+      awsConfig.credentials = {
+        accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
+      };
+    }
+    // Otherwise, let AWS SDK use the default credential chain (IAM roles, profiles, etc.)
+
+    this.bedrockClient = new BedrockRuntimeClient(awsConfig);
 
   }
 
@@ -90,7 +101,7 @@ class EmbeddingService {
    * ```typescript
    * const embedding = await embeddingService.generateEmbeddingBedrock(
    *   'Natural language processing',
-   *   { model: 'amazon.titan-embed-text-v1' }
+   *   { model: 'amazon.titan-embed-text-v2:0' }
    * );
    * ```
    */
@@ -98,7 +109,7 @@ class EmbeddingService {
     text: string, 
     options: EmbeddingOptions = {}
   ): Promise<Embedding> {
-    const { model: modelId = 'amazon.titan-embed-text-v1' } = options;
+    const { model: modelId = 'amazon.titan-embed-text-v2:0' } = options;
 
     try {
       const input = {
@@ -160,6 +171,7 @@ class EmbeddingService {
       throw new Error('Input text cannot be empty');
     }
 
+    console.log('provider', provider)
     switch (provider) {
       case 'bedrock':
         return await this.generateEmbeddingBedrock(text, options);
@@ -223,7 +235,7 @@ class EmbeddingService {
         if (model === 'text-embedding-3-large') return 3072;
         return 1536; // Default for ada-002
       case 'bedrock':
-        return 1536; // Titan embed text v1
+        return 1024; // Titan embed text v2
       default:
         return 1536;
     }

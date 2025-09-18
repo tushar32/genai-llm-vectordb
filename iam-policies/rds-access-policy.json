@@ -1,0 +1,39 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "RDSProxyConnect",
+      "Effect": "Allow",
+      "Action": [
+        "rds-db:connect"
+      ],
+      "Resource": [
+        "arn:aws:rds-db:us-east-1:*:dbuser:*/dev_rag",
+        "arn:aws:rds-db:us-east-1:*:dbuser:*/staging_rag",
+        "arn:aws:rds-db:us-east-1:*:dbuser:*/prod_rag"
+      ]
+    },
+    {
+      "Sid": "RDSDescribe",
+      "Effect": "Allow",
+      "Action": [
+        "rds:DescribeDBProxies",
+        "rds:DescribeDBProxyTargets",
+        "rds:DescribeDBInstances"
+      ],
+      "Resource": [
+        "arn:aws:rds:us-east-1:*:db-proxy:rag-api-*-proxy",
+        "arn:aws:rds:us-east-1:*:db:rag-api-*"
+      ]
+    },
+    {
+      "Sid": "RDSSignerGenerate",
+      "Effect": "Allow",
+      "Action": [
+        "rds:DescribeDBInstances",
+        "rds:DescribeDBClusters"
+      ],
+      "Resource": "*"
+    }
+  ]
+}

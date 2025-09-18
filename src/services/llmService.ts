@@ -287,6 +287,7 @@ Answer:`;
         objectMode: false,
         transform(chunk: any, encoding: BufferEncoding, callback: (error?: Error | null, data?: any) => void): void {
           try {
+            console.log('Processing chunk:', chunk);
             const chunkStr = chunk.toString();
             const lines = chunkStr.split('\n').filter((line: string) => line.trim());
             

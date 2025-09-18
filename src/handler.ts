@@ -34,9 +34,9 @@ function parseRequestBody(event: any): any {
 
 
 /**
- * Main Lambda handler with streaming response support
+ * Core handler logic that can be used both in Lambda and locally
  */
-export const handler = awslambda.streamifyResponse(async (event, responseStream, _context) => {
+export const handleRequest = async (event: any, responseStream: any, _context: any) => {
   console.log('Lambda streaming request:', {
     path: event.path,
     method: event.requestContext?.http?.method || event.httpMethod,
@@ -67,7 +67,7 @@ export const handler = awslambda.streamifyResponse(async (event, responseStream,
 
     if (path === '/ask' && method === 'POST') {
       const body = parseRequestBody(event);
-      const { query, limit = 5 } = body;
+      const { query, limit = 5, provider } = body;
 
       if (!query) {
         responseStream.write('Error: Query parameter is required');
@@ -76,7 +76,7 @@ export const handler = awslambda.streamifyResponse(async (event, responseStream,
       }
 
       // Generate query embedding
-      const queryEmbedding = await embeddingService.generateEmbedding(query);
+      const queryEmbedding = await embeddingService.generateEmbedding(query, provider);
       
       // Search for relevant documents
       const searchResults = await dbService.raw(
@@ -120,4 +120,12 @@ export const handler = awslambda.streamifyResponse(async (event, responseStream,
     responseStream.write(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
     responseStream.end();
   }
-});
+};
+
+/**
+ * Lambda handler with streaming response support (for AWS deployment)
+ * Only available in AWS Lambda runtime environment
+ */
+export const handler = typeof awslambda !== 'undefined' && awslambda.streamifyResponse 
+  ? awslambda.streamifyResponse(handleRequest)
+  : handleRequest;

@@ -9,12 +9,12 @@ provider:
   stage: ${opt:stage, 'dev'}
   memorySize: 1024
   timeout: 30
+  # Use specific IAM roles instead of inline policies
+  iam:
+    role: ${self:custom.lambdaRole.${opt:stage, 'dev'}}
   # VPC configuration is required for the Lambda to connect to the RDS Proxy
   vpc: ${self:custom.vpc.config.${opt:stage, 'dev'}, ''}
   environment: ${self:custom.environment.${opt:stage, 'dev'}}
-  iam:
-    role:
-      statements: ${self:custom.iamStatements.${opt:stage, 'dev'}}
 
 functions:
   api:
@@ -39,6 +39,13 @@ plugins:
 
 custom:
   stage: ${opt:stage, self:provider.stage}
+  
+  # Lambda execution roles for each environment
+  lambdaRole:
+    dev: arn:aws:iam::${aws:accountId}:role/rag-api-dev-lambda-role
+    staging: arn:aws:iam::${aws:accountId}:role/rag-api-staging-lambda-role
+    production: arn:aws:iam::${aws:accountId}:role/rag-api-production-lambda-role
+  
   environment:
     dev:
       NODE_ENV: ${self:provider.stage}
@@ -49,6 +56,7 @@ custom:
       DB_PASSWORD: ${self:custom.database.password.dev}
       DB_IAM_AUTH: ${self:custom.database.iamAuth.dev}
       BEDROCK_MODEL_ID: ${env:BEDROCK_MODEL_ID, 'anthropic.claude-3-sonnet-20240229-v1:0'}
+      AWS_REGION: ${self:provider.region}
     staging:
       NODE_ENV: ${self:provider.stage}
       DB_HOST: ${self:custom.database.host.staging}
@@ -57,6 +65,17 @@ custom:
       DB_USER: ${self:custom.database.user.staging}
       DB_IAM_AUTH: ${self:custom.database.iamAuth.staging}
       BEDROCK_MODEL_ID: ${env:BEDROCK_MODEL_ID, 'anthropic.claude-3-sonnet-20240229-v1:0'}
+      AWS_REGION: ${self:provider.region}
+    production:
+      NODE_ENV: ${self:provider.stage}
+      DB_HOST: ${self:custom.database.host.production}
+      DB_PORT: ${self:custom.database.port.production}
+      DB_NAME: ${self:custom.database.name.production}
+      DB_USER: ${self:custom.database.user.production}
+      DB_IAM_AUTH: ${self:custom.database.iamAuth.production}
+      BEDROCK_MODEL_ID: ${env:BEDROCK_MODEL_ID, 'anthropic.claude-3-sonnet-20240229-v1:0'}
+      AWS_REGION: ${self:provider.region}
+      
   vpc:
     config:
       dev: ~  # No VPC for local development
@@ -66,46 +85,42 @@ custom:
         subnetIds:
           - subnet-029c4de344e696f6e
           - subnet-0313cd1b3c53cc058
+      production:
+        securityGroupIds:
+          - ${env:PROD_SECURITY_GROUP_ID}
+        subnetIds:
+          - ${env:PROD_SUBNET_ID_1}
+          - ${env:PROD_SUBNET_ID_2}
 
   database:
     host:
       dev: localhost
-      staging: rag-api-staging-proxy.proxy-cq9g6qc2s22h.us-east-1.rds.amazonaws.com # <-- Find this in the RDS Proxy console
+      staging: rag-api-staging-proxy.proxy-cq9g6qc2s22h.us-east-1.rds.amazonaws.com
+      production: ${env:PROD_DB_HOST}
     port:
       dev: 5432
       staging: 5432
+      production: 5432
     name:
       dev: vectordb
-      staging: rag-api-dev-db
+      staging: rag-api-staging-db
+      production: rag-api-production-db
     user:
       dev: postgres
-      staging: dev_rag
+      staging: staging_rag
+      production: prod_rag
     password:
       dev: postgres
-      staging: '' # Password is now handled by IAM
+      staging: '' # Password is handled by IAM
+      production: '' # Password is handled by IAM
     iamAuth:
       dev: false
       staging: true
+      production: true
     proxyResourceId:
       dev: null
-      staging: prx-0123456789abcdef # <-- The Resource ID of your RDS Proxy
-
-  iamStatements:
-    dev:
-      - Effect: Allow
-        Action:
-          - bedrock:InvokeModel
-          - bedrock:InvokeModelWithResponseStream
-        Resource: '*'
-    staging:
-      - Effect: Allow
-        Action:
-          - bedrock:InvokeModel
-          - bedrock:InvokeModelWithResponseStream
-        Resource: '*'
-      - Effect: Allow
-        Action: rds-db:connect
-        Resource: 'arn:aws:rds-db:${aws:region}:${aws:accountId}:dbuser:${self:custom.database.proxyResourceId.staging}/${self:custom.database.user.staging}'
+      staging: prx-0123456789abcdef
+      production: ${env:PROD_PROXY_RESOURCE_ID}
 
   serverless-offline:
     httpPort: 3002
@@ -113,12 +128,32 @@ custom:
     lambdaPort: 3003
     noPrependStage: true
 
-
 package:
   patterns:
     - '!.gitignore'
     - '!tsconfig.json'
     - '!jest.config.*'
     - '!.eslintrc.*'
+    - '!iam-policies/**'
+    - '!trust-policies/**'
+    - '!scripts/**'
+    - '!docs/**'
     - 'dist/**'
     - 'package.json'
+
+# Resources section for additional AWS resources if needed
+resources:
+  Resources:
+    # CloudWatch Log Group with retention policy
+    ApiLogGroup:
+      Type: AWS::Logs::LogGroup
+      Properties:
+        LogGroupName: /aws/lambda/${self:service}-${self:provider.stage}-api
+        RetentionInDays: 14
+
+  Outputs:
+    LambdaRoleArn:
+      Description: "Lambda execution role ARN"
+      Value: ${self:custom.lambdaRole.${opt:stage, 'dev'}}
+      Export:
+        Name: ${self:service}-${self:provider.stage}-lambda-role-arn
